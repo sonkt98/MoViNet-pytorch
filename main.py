@@ -6,6 +6,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import random_split, DataLoader
 import torch
+from tqdm import tqdm
+
 import transforms as T
 from load_dataset import HMDB51, AIHUB, VideoAIHUB, AIHUB_TEST
 from movinets import MoViNet
@@ -121,7 +123,7 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
     csamp_none = 0
     tloss = 0
     with torch.no_grad():
-        for data, _, target in data_load:
+        for data, _, target in tqdm(data_load):
             data = data.cuda()
             target = target.cuda()
             model.clean_activation_buffers()
@@ -130,7 +132,7 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
                 # print(torch.max(F.softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)))
                 loss = F.nll_loss(output, target)
             _, pred = torch.max(output, dim=1)
-            a = [2 for i in range(4)]
+            a = [2 for i in range(len(target))]
             b = torch.FloatTensor(a).cuda()
             tloss += loss.item()
             compare = target.le(b)
@@ -141,7 +143,7 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
             csamp_label += (compare & compare_label).sum()
             csamp_none += (~compare & compare_none).sum()
             # print(compare, compare_label, compare_none)
-            print(target, pred, loss.item())
+            # print(target, pred, loss.item())
 
     aloss = tloss / len(data_load)
     loss_val.append(aloss)
@@ -162,20 +164,20 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
     del data
     # GPU memory delete
     torch.cuda.empty_cache()
-    return acc
+    return acc, acc_label, acc_none
 
 def train():
     num_frames = 10  # 16
     clip_steps = 1
-    Bs_Train = 4
-    Bs_Test = 4
+    Bs_Train = 16
+    Bs_Test = 16
     transform = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
         T.Resize((200, 200)),
         T.RandomHorizontalFlip(),
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
-        # T.RandomVerticalFlip(),
-        # T.RandomPerspective(),
+        T.RandomVerticalFlip(),
+        T.RandomPerspective(),
         T.RandomCrop((172, 172))])
     transform_test = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
@@ -209,7 +211,7 @@ def train():
     N_EPOCHS = 50
 
     # MoviNetA0, ~ A5
-    model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
+    model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
     start_time = time.time()
 
     trloss_val, tsloss_val = [], []
@@ -237,11 +239,11 @@ def train():
     for epoch in range(1, N_EPOCHS + 1):
         print('Epoch:', epoch)
         train_iter_stream(model, optimz, train_loader, trloss_val)
-        acc = evaluate_stream(model, test_loader, tsloss_val)
+        acc, acc_label, acc_none = evaluate_stream(model, test_loader, tsloss_val)
         scheduler.step()
         writer.add_scalars("Loss", {'train': np.mean(np.array(trloss_val)),
                           'valid': np.mean(np.array(tsloss_val))}, epoch)
-        writer.add_scalars("Accuracy", {'valid': acc}, epoch)
+        writer.add_scalars("Accuracy", {'Total': acc, 'Label': acc_label, 'None': acc_none}, epoch)
         if acc > best_acc:
             torch.save({
                 'epoch': epoch,
@@ -256,7 +258,7 @@ def train():
 
 
 def test_model():
-    Bs_Test = 4
+    Bs_Test = 16
     # MoviNetA0, ~ A5
     start_time = time.time()
 
@@ -268,11 +270,11 @@ def test_model():
             T.Resize((200, 200)),
             # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
             T.CenterCrop((172, 172))])
-        model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
-        checkpoint = torch.load("best_model.pt")
+        model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
+        # checkpoint = torch.load("best_model.pt")
         model.classifier[3] = torch.nn.Conv3d(2048, 10, (1, 1, 1))
         model = model.cuda()
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # model.load_state_dict(checkpoint['model_state_dict'])
 
         # model = torch.load('model.pt')
         print(model.classifier)
