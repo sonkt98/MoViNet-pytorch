@@ -210,13 +210,13 @@ if __name__ == '__main__':
     #                 print(os.path.join(video_list, video))
     #                 shutil.move(video_path, save_file_path)
 
-    video_list = "/home/petpeotalk/AIHUB/Training/원천데이터_6"
+    video_list = "/home/petpeotalk/AIHUB/Validation/원천데이터/DOG"
     new_video_dir = "/home/petpeotalk/AIHUB/seperate"
 
     for i, dir in enumerate(tqdm(os.listdir(video_list))):
         label = dir.split('-')[-2]
         dir_path = os.path.join(video_list, dir)
-        if checkLocation(os.path.join("/home/petpeotalk/AIHUB/Training/라벨링데이터_6",  dir + ".json")):
+        if checkLocation(os.path.join("/home/petpeotalk/AIHUB/Validation/라벨링데이터/DOG",  dir + ".json")):
             save_dir_path = os.path.join("/home/petpeotalk/AIHUB/라벨", label)
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)

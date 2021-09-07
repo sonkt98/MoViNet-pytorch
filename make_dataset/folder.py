@@ -97,6 +97,7 @@ def make_custom_dataset(
         for images_dir in tqdm(sorted(os.listdir(os.path.join(directory, target_class)))):
             path = os.path.join(directory, target_class, images_dir)
             item = path, class_index
+            if len(os.listdir(path))<10: continue
             instances.append(item)
         if target_class not in available_classes:
             available_classes.add(target_class)

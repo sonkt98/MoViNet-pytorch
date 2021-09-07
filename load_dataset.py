@@ -293,7 +293,7 @@ class AIHUB(VisionDataset):
 
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int]:
         path, class_index = self.samples[idx]
-        vframes_list = [Image.open(os.path.join(path, file)).convert('RGB') for i, file in enumerate(sorted(os.listdir(path)))]
+        vframes_list = [Image.open(os.path.join(path, file)).convert('RGB') for i, file in enumerate(sorted(os.listdir(path))) if i<10]
         # print(sorted(os.listdir(path)))
         # print(torch.from_numpy(vframes_list))
         vframes = torch.as_tensor(np.stack(vframes_list))
@@ -339,7 +339,7 @@ class AIHUB_TEST(VisionDataset):
 
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int]:
         path, class_index = self.samples[idx]
-        vframes_list = [Image.open(os.path.join(path, file)).convert('RGB') for i, file in enumerate(sorted(os.listdir(path)))]
+        vframes_list = [Image.open(os.path.join(path, file)).convert('RGB') for i, file in enumerate(sorted(os.listdir(path))) if i < 10]
         # print(sorted(os.listdir(path)))
         # print(torch.from_numpy(vframes_list))
         vframes = torch.as_tensor(np.stack(vframes_list))

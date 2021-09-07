@@ -92,10 +92,10 @@ def train_iter_stream(model, optimz, data_load, loss_val, n_clips=2, n_clip_fram
         for j in range(n_clips):
             output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
             _, pred = torch.max(output, dim=1)
-            nSamples = [755/2617, 1010/2617, 852/2617]
-            normedWeights = [1 - (x / sum(nSamples)) for x in nSamples]
-            normedWeights = torch.FloatTensor(normedWeights).cuda()
-            loss = F.nll_loss(output, target, normedWeights) / n_clips
+            # nSamples = [755, 1010, 852]
+            # normedWeights = [1 - (x / sum(nSamples)) for x in nSamples]
+            # normedWeights = torch.FloatTensor(normedWeights).cuda()
+            loss = F.nll_loss(output, target) / n_clips
             loss.backward()
         l_batch += loss.item() * n_clips
         optimz.step()
@@ -115,7 +115,10 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
     model.eval()
     # model.cuda()
     samples = len(data_load.dataset)
-    csamp = 0
+    labels = 0
+    nones = 0
+    csamp_label = 0
+    csamp_none = 0
     tloss = 0
     with torch.no_grad():
         for data, _, target in data_load:
@@ -124,38 +127,55 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
             model.clean_activation_buffers()
             for j in range(n_clips):
                 output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
-                print(torch.max(F.softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)))
+                # print(torch.max(F.softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)))
                 loss = F.nll_loss(output, target)
             _, pred = torch.max(output, dim=1)
-            print(target, pred, loss.item())
+            a = [2 for i in range(4)]
+            b = torch.FloatTensor(a).cuda()
             tloss += loss.item()
-            csamp += pred.eq(target).sum()
+            compare = target.le(b)
+            labels += compare.sum()
+            nones += (~compare).sum()
+            compare_label = pred.eq(target)
+            compare_none = pred.gt(b)
+            csamp_label += (compare & compare_label).sum()
+            csamp_none += (~compare & compare_none).sum()
+            # print(compare, compare_label, compare_none)
+            print(target, pred, loss.item())
 
     aloss = tloss / len(data_load)
     loss_val.append(aloss)
+    csamp = csamp_label+csamp_none
     acc = 100.0 * csamp / samples
     print('\nAverage test loss: ' + '{:.4f}'.format(aloss) +
           '  Accuracy:' + '{:5}'.format(csamp) + '/' +
           '{:5}'.format(samples) + ' (' +
           '{:4.2f}'.format(acc) + '%)\n')
+    acc_label = 100.0 * csamp_label / labels
+    acc_none = 100.0 * csamp_none / nones
+    print('Label Accuracy: ' + '{:5}'.format(csamp_label) + '/' +
+          '{:5}'.format(labels) + ' (' +
+          '{:4.2f}'.format(acc_label) + '%)\n' +
+          '  None Accuracy:' + '{:5}'.format(csamp_none) + '/' +
+          '{:5}'.format(nones) + ' (' +
+          '{:4.2f}'.format(acc_none) + '%)\n')
     del data
     # GPU memory delete
     torch.cuda.empty_cache()
     return acc
 
 def train():
-    torch.manual_seed(97)
     num_frames = 10  # 16
     clip_steps = 1
-    Bs_Train = 16
-    Bs_Test = 16
+    Bs_Train = 4
+    Bs_Test = 4
     transform = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
         T.Resize((200, 200)),
         T.RandomHorizontalFlip(),
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
-        T.RandomVerticalFlip(),
-        T.RandomPerspective(),
+        # T.RandomVerticalFlip(),
+        # T.RandomPerspective(),
         T.RandomCrop((172, 172))])
     transform_test = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
@@ -181,7 +201,7 @@ def train():
 
     hmdb51_train = AIHUB('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/train', transform=transform)
     #
-    hmdb51_test = AIHUB('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/valid', transform=transform_test)
+    hmdb51_test = AIHUB('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/test', transform=transform_test)
 
     train_loader = DataLoader(hmdb51_train, batch_size=Bs_Train, shuffle=True)
     test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
@@ -189,13 +209,13 @@ def train():
     N_EPOCHS = 50
 
     # MoviNetA0, ~ A5
-    model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=3, conv_type="2plus1d")
+    model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
     start_time = time.time()
 
     trloss_val, tsloss_val = [], []
     optimz = optim.Adam(model.parameters(), lr=0.0005)
     scheduler = MultiStepLR(optimz, milestones=[10, 30], gamma=0.1)
-    model.classifier[3] = torch.nn.Conv3d(2048, 3, (1, 1, 1))
+    model.classifier[3] = torch.nn.Conv3d(2048, 10, (1, 1, 1))
     # print(model.classifier[3])
     model = model.cuda()
 
@@ -236,8 +256,7 @@ def train():
 
 
 def test_model():
-
-    Bs_Test = 16
+    Bs_Test = 4
     # MoviNetA0, ~ A5
     start_time = time.time()
 
@@ -249,16 +268,16 @@ def test_model():
             T.Resize((200, 200)),
             # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
             T.CenterCrop((172, 172))])
-        model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=3, conv_type="2plus1d")
+        model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
         checkpoint = torch.load("best_model.pt")
-        model.classifier[3] = torch.nn.Conv3d(2048, 3, (1, 1, 1))
+        model.classifier[3] = torch.nn.Conv3d(2048, 10, (1, 1, 1))
         model = model.cuda()
         model.load_state_dict(checkpoint['model_state_dict'])
-        #
+
         # model = torch.load('model.pt')
         print(model.classifier)
 
-        hmdb51_test = AIHUB_TEST('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/test', transform=transform_test)
+        hmdb51_test = AIHUB('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/test', transform=transform_test)
         test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
         evaluate_stream(model, test_loader, tsloss_val)
 
@@ -270,5 +289,5 @@ def test_model():
 if __name__ == '__main__':
     model_name = "modelA0"
 
-    test_model()
-    # train()
+    # test_model()
+    train()
