@@ -1,3 +1,4 @@
+import os
 import time
 import torchvision
 import torch.nn.functional as F
@@ -9,7 +10,7 @@ import torch
 from tqdm import tqdm
 
 import transforms as T
-from load_dataset import HMDB51, AIHUB, VideoAIHUB, AIHUB_TEST
+from load_dataset import HMDB51, AIHUB, VideoAIHUB, AIHUB_INFERENCE
 from movinets import MoViNet
 from movinets.config import _C
 from torch.utils.tensorboard import SummaryWriter
@@ -94,10 +95,10 @@ def train_iter_stream(model, optimz, data_load, loss_val, n_clips=2, n_clip_fram
         for j in range(n_clips):
             output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
             _, pred = torch.max(output, dim=1)
-            # nSamples = [755, 1010, 852]
-            # normedWeights = [1 - (x / sum(nSamples)) for x in nSamples]
-            # normedWeights = torch.FloatTensor(normedWeights).cuda()
-            loss = F.nll_loss(output, target) / n_clips
+            nSamples = [1, 10, 15, 20, 20, 20, 20, 20, 20, 30]
+            normedWeights = [1 - (x / sum(nSamples)) for x in nSamples]
+            normedWeights = torch.FloatTensor(normedWeights).cuda()
+            loss = F.nll_loss(output, target, normedWeights) / n_clips
             loss.backward()
         l_batch += loss.item() * n_clips
         optimz.step()
@@ -131,7 +132,13 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
                 output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
                 # print(torch.max(F.softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)))
                 loss = F.nll_loss(output, target)
+                a = [[0.7 for i in range(10)] for k in range(len(data))]
+                b = torch.log(torch.FloatTensor(a)).cuda()
+                output = output.ge(b)
+            # print(torch.max(F.softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1), dim=1))
             _, pred = torch.max(output, dim=1)
+            pred = torch.IntTensor([3 if value == False else pred[i] for i, value in enumerate(_)]).cuda()
+            pred = pred.clamp(max=3)
             a = [2 for i in range(len(target))]
             b = torch.FloatTensor(a).cuda()
             tloss += loss.item()
@@ -184,22 +191,6 @@ def train():
         T.Resize((200, 200)),
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
         T.CenterCrop((172, 172))])
-    #
-    # hmdb51_train = HMDB51('aihub_data/', 'test_train_splits/', num_frames, frame_rate=5,
-    #                                            step_between_clips=clip_steps, fold=1, train=True,
-    #                                            transform=transform, num_workers=2)
-    #
-    # hmdb51_test = HMDB51('aihub_data/', 'test_train_splits/', num_frames, frame_rate=5,
-    #                                           step_between_clips=clip_steps, fold=1, train=False,
-    #                                           transform=transform_test, num_workers=2)
-
-    # hmdb51_train = VideoAIHUB('aihub_data/', num_frames, frame_rate=5,
-    #                                            step_between_clips=clip_steps, fold=1,
-    #                                            transform=transform, num_workers=2)
-    #
-    # hmdb51_test = VideoAIHUB('Validation/', num_frames, frame_rate=5,
-    #                                           step_between_clips=clip_steps, fold=1,
-    #                                           transform=transform_test, num_workers=2)
 
     hmdb51_train = AIHUB('/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/train', transform=transform)
     #
@@ -208,7 +199,7 @@ def train():
     train_loader = DataLoader(hmdb51_train, batch_size=Bs_Train, shuffle=True)
     test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
 
-    N_EPOCHS = 50
+    N_EPOCHS = 5
 
     # MoviNetA0, ~ A5
     model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
@@ -271,10 +262,10 @@ def test_model():
             # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
             T.CenterCrop((172, 172))])
         model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
-        # checkpoint = torch.load("best_model.pt")
+        checkpoint = torch.load("best_model.pt")
         model.classifier[3] = torch.nn.Conv3d(2048, 10, (1, 1, 1))
         model = model.cuda()
-        # model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint['model_state_dict'])
 
         # model = torch.load('model.pt')
         print(model.classifier)
@@ -288,8 +279,83 @@ def test_model():
 
     print('Execution time:', '{:5.2f}'.format(time.time() - start_time), 'seconds')
 
+
+def inference_stream(model, data_load, n_clips=2, n_clip_frames=5):
+    model.eval()
+
+    folder_name = []
+    prediction = []
+    with torch.no_grad():
+        for data, _, name in tqdm(data_load):
+            data = data.cuda()
+            model.clean_activation_buffers()
+            for j in range(n_clips):
+                output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
+                a = [[0.7 for i in range(10)] for k in range(len(data))]
+                b = torch.log(torch.FloatTensor(a)).cuda()
+                output = output.ge(b)
+                # print(torch.max(output, dim=1))
+            _, pred = torch.max(output, dim=1)
+            # print(pred)
+            pred = torch.IntTensor([3 if value==False else pred[i] for i, value in enumerate(_)]).cuda()
+            pred = pred.clamp(max=3)
+            folder_name += name
+            prediction += (pred.tolist())
+    del data
+    # GPU memory delete
+    torch.cuda.empty_cache()
+    return prediction, folder_name
+
+def inference(path):
+    Bs_Test = 16
+    transform_test = transforms.Compose([
+        T.ToFloatTensorInZeroOne(),
+        T.Resize((200, 200)),
+        # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
+        T.CenterCrop((172, 172))])
+    model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=10, conv_type="2plus1d")
+    # checkpoint = torch.load("best_model_A2_10class.pt")
+    checkpoint = torch.load("best_model.pt")
+    model.classifier[3] = torch.nn.Conv3d(2048, 10, (1, 1, 1))
+    model = model.cuda()
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    hmdb51_test = AIHUB_INFERENCE(path, transform=transform_test)
+    test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
+
+    prediction, video_list = inference_stream(model, test_loader)
+    label = ['bodyscratch', 'bodyshake', 'turn', 'none']
+
+    total = 0
+    total_label = 0
+    total_none = 0
+    label_acc = 0
+    none_acc = 0
+
+    for i, pred_idx in enumerate(prediction):
+        if i % 5 == 0: print()
+        print('{:<30s}:{:<15s}'.format(video_list[i], label[pred_idx]), end='|')
+        total += 1
+        # if(video_list[i].split('-')[-2] == label[pred_idx]): label_acc += 1
+        # if not ((video_list[i].split('-')[-2]) in label):
+        #     if (pred_idx==3): none_acc+=1
+        #     total_none+=1
+        # else:
+        #     total_label+=1
+    print("\n",total, "\n")
+    # print("\n\ntotal: {:4}/{:4}".format(label_acc+none_acc, total))
+    # print("label: {:4}/{:4}".format(label_acc, total_label))
+    # print("none: {:4}/{:4}".format(none_acc, total_none))
+    del model
+    del hmdb51_test
+
 if __name__ == '__main__':
     model_name = "modelA0"
 
+    # train()
     # test_model()
-    train()
+
+    path = '/home/petpeotalk/AIHUB/hackerton-full-dataset-ver2/user_data'
+    for i in sorted(os.listdir(path)):
+        inference(os.path.join(path, i))
+    # inference()

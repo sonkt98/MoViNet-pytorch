@@ -12,7 +12,7 @@ from torchvision.datasets.folder import make_dataset
 from torchvision.datasets.video_utils import VideoClips
 from torchvision.models.detection import transform
 
-from make_dataset.folder import find_classes, find_custom_classes, make_custom_dataset, find_custom_classes_test
+from make_dataset.folder import find_classes, find_custom_classes, make_custom_dataset, make_custom_dataset_test
 import numpy as np
 
 class HMDB51(VisionDataset):
@@ -305,7 +305,7 @@ class AIHUB(VisionDataset):
 
         return video, " ", class_index
 
-class AIHUB_TEST(VisionDataset):
+class AIHUB_INFERENCE(VisionDataset):
 
     def __init__(
         self,
@@ -317,31 +317,21 @@ class AIHUB_TEST(VisionDataset):
         _video_min_dimension: int = 0,
         _audio_samples: int = 0,
     ) -> None:
-        super(AIHUB_TEST, self).__init__(root)
+        super(AIHUB_INFERENCE, self).__init__(root)
 
-        self.classes, class_to_idx = find_custom_classes_test(self.root)
-        self.samples = make_custom_dataset(
+        self.samples = make_custom_dataset_test(
             self.root,
-            class_to_idx,
+            None,
         )
-        # video_paths = [path for (path, _) in self.samples]
-        # self.video_clips = []
-        # for video_dir in video_paths:
-        #     self.video_clips.append(video_dir)
         self.transform = transform
-        # print(self.samples)
-    # @property
-    # def metadata(self) -> Dict[str, Any]:
-    #     return self.full_video_clips.metadata
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int]:
         path, class_index = self.samples[idx]
-        vframes_list = [Image.open(os.path.join(path, file)).convert('RGB') for i, file in enumerate(sorted(os.listdir(path))) if i < 10]
-        # print(sorted(os.listdir(path)))
-        # print(torch.from_numpy(vframes_list))
+        file_list = sorted(os.listdir(path))
+        vframes_list = [Image.open(os.path.join(path, file_list[i])).convert('RGB') for i in range(class_index, class_index+10)]
         vframes = torch.as_tensor(np.stack(vframes_list))
         video = vframes
 
@@ -349,4 +339,4 @@ class AIHUB_TEST(VisionDataset):
         if self.transform is not None:
             video = self.transform(video.cuda())
 
-        return video, " ", class_index
+        return video, " ", os.path.basename(path)
