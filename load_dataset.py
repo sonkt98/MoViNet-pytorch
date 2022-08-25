@@ -261,7 +261,7 @@ class AIHUB(VisionDataset):
     TRAIN_TAG = 1
     TEST_TAG = 2
 
-    def __init__(
+    def  __init__(
         self,
         root: str,
         transform: Optional[Callable] = None,

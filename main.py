@@ -84,7 +84,7 @@ def train_iter_stream(model, optimz, data_load, loss_val, n_clips=2, n_clip_fram
     """
     # clean the buffer of activations
     samples = len(data_load.dataset)
-    # model.cuda()
+    model.cuda()
     model.train()
     model.clean_activation_buffers()
     optimz.zero_grad()
@@ -100,6 +100,7 @@ def train_iter_stream(model, optimz, data_load, loss_val, n_clips=2, n_clip_fram
             # nSamples = [1, 10, 15, 20, 20, 20, 20, 20, 20, 30]
             # normedWeights = [1 - (x / sum(nSamples)) for x in nSamples]
             # normedWeights = torch.FloatTensor(normedWeights).cuda()
+            class_weight = torch.tensor([1/131, 1/69, 1/86, 1/378, 1/27, 1/21, 1/207, 1/454, 1/95, 1/46, 1/791])
             loss = F.nll_loss(output, target) / n_clips
             loss.backward()
         l_batch += loss.item() * n_clips
@@ -119,7 +120,8 @@ def train_iter_stream(model, optimz, data_load, loss_val, n_clips=2, n_clip_fram
 def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
     model.eval()
     samples = len(data_load.dataset)
-    csamp = 0
+    csamp1 = 0
+    csamp2 = 0
     tloss = 0
     with torch.no_grad():
         for data, _, target in data_load:
@@ -129,21 +131,32 @@ def evaluate_stream(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
             for j in range(n_clips):
                 output = F.log_softmax(model(data[:, :, (n_clip_frames) * (j):(n_clip_frames) * (j + 1)]), dim=1)
                 loss = F.nll_loss(output, target)
-            _, pred = torch.max(output, dim=1)
-            tloss += loss.item()
-            csamp += pred.eq(target).sum()
+            tloss += loss.item() # top1기준 loss
+
+            _, pred = torch.max(output, dim=1) # top 1 accuracy 사용시
+            csamp1 += pred.eq(target).sum() # top 1 accuracy 사용시 pred와 target이 같은 correct sample의 수
+
+            _, top3_pred = torch.topk(output, 3)  # top 3 accuracy 사용시
+            for top3, targ in zip(top3_pred.tolist(), target.tolist()): # top 3 accuracy 사용시 pred에 target이 포함되는 correct sample의 수
+                if targ in top3:
+                    csamp2 += 1
 
     aloss = tloss / len(data_load)
     loss_val.append(aloss)
-    acc = 100.0 * csamp / samples
+    top1_acc = 100.0 * csamp1 / samples
+    top3_acc = 100.0 * csamp2 / samples
     print('\nAverage test loss: ' + '{:.4f}'.format(aloss) +
-          '  Accuracy:' + '{:5}'.format(csamp) + '/' +
+          '  top1-Accuracy:' + '{:5}'.format(csamp1) + '/' +
           '{:5}'.format(samples) + ' (' +
-          '{:4.2f}'.format(acc) + '%)\n')
+          '{:4.2f}'.format(top1_acc) + '%)' +
+          '  top3-Accuracy:' + '{:5}'.format(csamp2) + '/' +
+          '{:5}'.format(samples) + ' (' +
+          '{:4.2f}'.format(top3_acc) + '%)\n'
+          )
     del data
     # GPU memory delete
     torch.cuda.empty_cache()
-    return acc, 0, 0
+    return top1_acc, 0, 0
 
 def evaluate_none(model, data_load, loss_val, n_clips=2, n_clip_frames=5):
     model.eval()
@@ -216,18 +229,21 @@ def train():
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
         # T.RandomVerticalFlip(),
         T.RandomPerspective(p=0.8),
-        T.RandomCrop((172, 172))])
+        T.RandomCrop((172, 172))
+    ])
     transform_test = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
         T.Resize((200, 200)),
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
-        T.CenterCrop((172, 172))])
+        T.CenterCrop((172, 172))
+    ])
 
     # hmdb51_train = AIHUB('/home/petpeotalk/AIHUB/210915-userdataset-11/train', transform=transform)
-    hmdb51_train = AIHUB('/home/petpeotalk/AIHUB/210915-userdataset-11/train', transform=transform)
-
+    # hmdb51_train = AIHUB('/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/userdata/210915-userdataset-11/train', transform=transform) # 결과 재현용 데이터
+    hmdb51_train = AIHUB('/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/labeled_data/20220718_action/crop_resized/original_dataset_resized/make_test_set/train_7', transform=transform)
     #
-    hmdb51_test = AIHUB('/home/petpeotalk/AIHUB/210915-userdataset-11/valid', transform=transform_test)
+    # hmdb51_test = AIHUB('/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/userdata/210915-userdataset-11/valid', transform=transform_test) # 결과 재현용 데이터
+    hmdb51_test = AIHUB('/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/labeled_data/20220718_action/crop_resized/original_dataset_resized/make_test_set/test_3', transform=transform_test)
 
     train_loader = DataLoader(hmdb51_train, batch_size=Bs_Train, shuffle=True)
     test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
@@ -235,19 +251,20 @@ def train():
     N_EPOCHS = 50
 
     # MoviNetA0, ~ A5
-    model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=11, conv_type="2plus1d")
+    model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=11, conv_type="2plus1d")
+    # model = torch.load('/home/petpeotalk/MoViNet-pytorch/model_labeled_data.pt') # 이 부분을 통해서 model.pt에 이어서 전이학습하는듯
     start_time = time.time()
-
+    #
     trloss_val, tsloss_val = [], []
-    optimz = optim.Adam(model.parameters(), lr=0.0005)
+    optimz = optim.Adam(model.parameters(), lr=0.00005)
     scheduler = MultiStepLR(optimz, milestones=[30, 50], gamma=0.1)
     model.classifier[3] = torch.nn.Conv3d(2048, 11, (1, 1, 1))
     # print(model.classifier[3])
+
     model = model.cuda()
 
-    # model = torch.load('model.pt')
     #######################  load_model  ###########################
-    # checkpoint = torch.load("best_model.pt")
+    # checkpoint = torch.load("/home/petpeotalk/MoViNet-pytorch/best_model_A2_user_0.0005.pt")
     # model.load_state_dict(checkpoint['model_state_dict'])
     # print(model.classifier[3])
     # optimz.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -267,8 +284,8 @@ def train():
         scheduler.step()
         writer.add_scalars("Loss", {'train': np.mean(np.array(trloss_val)),
                           'valid': np.mean(np.array(tsloss_val))}, epoch)
-        writer.add_scalars("Accuracy", {'Total': acc, 'Label': acc_label, 'None': acc_none}, epoch)
-        if acc > best_acc:
+        writer.add_scalars("Accuracy", {'Total': acc, 'Label': acc_label, 'None': acc_none}, epoch) # tensorboard에 test accuracy
+        if acc > best_acc: # test set에 대한 정확도 갱신 시, weight 저장 가장 좋은 성능 낸 경우가 weight으로 저장 됌.
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -276,7 +293,7 @@ def train():
                 'scheduler': scheduler.state_dict(),
             }, 'best_model.pt')
             best_acc = acc
-            torch.save(model, 'model.pt')
+            torch.save(model, 'model_cropped_data_changeTransform.pt')
     writer.flush()
     print('Execution time:', '{:5.2f}'.format(time.time() - start_time), 'seconds')
 
@@ -295,30 +312,49 @@ if __name__ == '__main__':
     model_name = "modelA0"
 
     #########################################################################################################
-    model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=11, conv_type="2plus1d")
+    # model = MoViNet(_C.MODEL.MoViNetA2, causal=True, pretrained=True, num_classes=11, conv_type="2plus1d")
     # checkpoint = torch.load("best_model_A2_user_0.0005.pt")
-    checkpoint = torch.load("best_model.pt")
-    model.classifier[3] = torch.nn.Conv3d(2048, 11, (1, 1, 1))
-    model = model.cuda()
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # model.classifier[3] = torch.nn.Conv3d(2048, 11, (1, 1, 1))  # 11이 class 개수
+    # model = model.cuda()
+    # model.load_state_dict(checkpoint['model_state_dict'])
 
-    Bs_Test = 16
-    transform_test = transforms.Compose([
-        T.ToFloatTensorInZeroOne(),
-        T.Resize((200, 200)),
-        # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
-        T.CenterCrop((172, 172))])
-    hmdb51_test = AIHUB('/home/petpeotalk/AIHUB/210915-userdataset-11/test', transform=transform_test)
-    test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
+    ################test###################################################################################
+    # Bs_Test = 16
+    # transform_test = transforms.Compose([
+    #     T.ToFloatTensorInZeroOne(),
+    #     T.Resize((200, 200)),
+    #     # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
+    #     T.CenterCrop((172, 172))])
+    #
+    # model = torch.load('/home/petpeotalk/MoViNet-pytorch/model_original_data_test_noCrop.pt')
+    #
+    # hmdb51_test = AIHUB('/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/labeled_data/20220718_action/crop_resized/original_dataset_resized/make_test_set/test_3', transform=transform_test)
+    # test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
     #######################################################################################################
 
-    # train()
-    test_model(model, test_loader)
+    train()
+
+    # test_model(model, test_loader)
     # evaluate_none(model, test_loader, [])
 
+    # model = MoViNet(_C.MODEL.MoViNetA0, causal=True, pretrained=True, num_classes=11, conv_type="2plus1d")
+    # path = '/home/petpeotalk/MoviNet_real/dogibogi-ai-research/projects/action_recognition/MoViNet-pytorch/labeled_data/20220718_action/original_dataset/test_3_original'
+    # inference_user(model, path, '/home/petpeotalk/MoViNet-pytorch/inference/result')
 
-    path = '/home/petpeotalk/AIHUB/210915-userdataset-11/valid'
-    for i in sorted(os.listdir(path)):
-        inference_user(model, os.path.join(path, i), i)
-        # inference_none(model, os.path.join(path, i), i)
 
+    # label_list = ['bite', 'eat', 'jump', 'lie', 'scratch', 'shake', 'sit', 'sniff', 'stand', 'turn', 'walk']
+    # label_total_predict_count_dict = {key: 0 for key in label_list}
+    # label_correct_predict_count_dict = {key: 0 for key in label_list}
+    # for i in sorted(os.listdir(path)):
+    #     # inference_none(model, os.path.join(path, i), i)
+    #     label_predict_count_dict, TP = inference_user(model, os.path.join(path, i), i)
+    #     label_correct_predict_count_dict[i] +=TP
+    #     for key, value in label_predict_count_dict.items():
+    #         label_total_predict_count_dict[key]+=value
+    # #
+    # for i in label_list:
+    #     if label_total_predict_count_dict[i]==0:
+    #         print(i+'로 예측한 data가 존재하지 않음\n')
+    #         continue
+    #
+    #     print(i+' precision: '+ '{:4.2f}'.format(100*label_correct_predict_count_dict[i]/label_total_predict_count_dict[i]) + '%\n')
