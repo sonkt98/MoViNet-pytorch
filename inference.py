@@ -144,9 +144,10 @@ def inference_user(model, path, target):
     Bs_Test = 16
     transform_test = transforms.Compose([
         T.ToFloatTensorInZeroOne(),
-        T.Resize((200, 200)),
+        T.Resize((250, 250)),
         # T.Normalize(mean=[0.43216, 0.394666, 0.37645], std=[0.22803, 0.22145, 0.216989]),
-        T.CenterCrop((172, 172))])
+        T.CenterCrop((224, 224))
+    ])
 
     hmdb51_test = AIHUB_INFERENCE(path, transform=transform_test)
     test_loader = DataLoader(hmdb51_test, batch_size=Bs_Test, shuffle=False)
